@@ -1,5 +1,10 @@
 import { config } from '../global/config';
-import { NetworkName, RPC_DEFAULT_NODES, SupportedRpcVersion } from '../global/constants';
+import {
+  NetworkName,
+  RPC_UNKNOWN_VERSIONED_CANDIDATES,
+  RPC_VERSIONED_DEFAULT_NODES,
+  SupportedRpcVersion,
+} from '../global/constants';
 import { logger } from '../global/logger';
 import {
   Abi,
@@ -15,7 +20,8 @@ import { isSierra } from './contract';
 import { formatSpaces } from './hash';
 import { parse, stringify } from './json';
 import { isHex, toHex } from './num';
-import { toApiVersion } from './resolve';
+import { isVersion, toAnyPatchVersion } from './resolve';
+import { LibraryError } from './errors';
 import { isDecimalString } from './shortString';
 import { compressProgram } from './stark';
 import { isBigInt, isNumber, isString } from './typed';
@@ -144,14 +150,134 @@ export const getDefaultNodeUrl = (
 /**
  * return Defaults RPC Nodes endpoints
  */
-export function getDefaultNodes(rpcVersion: SupportedRpcVersion) {
-  const apiVersion = toApiVersion(rpcVersion);
-  return Object.fromEntries(
-    Object.entries(RPC_DEFAULT_NODES).map(([key, urls]) => [
-      key,
-      urls.map((url) => `${url}${apiVersion}`),
-    ])
+export function getDefaultNodes(rpcVersion: SupportedRpcVersion): {
+  SN_MAIN: string[];
+  SN_SEPOLIA: string[];
+} {
+  return RPC_VERSIONED_DEFAULT_NODES[
+    rpcVersion as keyof typeof RPC_VERSIONED_DEFAULT_NODES
+  ] as unknown as {
+    SN_MAIN: string[];
+    SN_SEPOLIA: string[];
+  };
+}
+
+async function fetchNodeSpecVersion(
+  nodeUrl: string,
+  baseFetch?: WindowOrWorkerGlobalScope['fetch']
+): Promise<string> {
+  const f =
+    baseFetch ??
+    config.get('fetch') ??
+    (typeof globalThis !== 'undefined' ? globalThis.fetch : undefined);
+  if (!f) {
+    throw new LibraryError(
+      "'fetch()' not detected, use the 'baseFetch' constructor parameter to set it"
+    );
+  }
+  const response = await f(nodeUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      id: 0,
+      jsonrpc: '2.0',
+      method: 'starknet_specVersion',
+      params: [],
+    }),
+  });
+  const json = await response.json();
+  if (json.error) {
+    throw new LibraryError(json.error.message ?? 'Unknown RPC error');
+  }
+  return json.result as string;
+}
+
+const nodeSpecVersionCache: Record<string, string> = {};
+
+async function getCachedNodeSpecVersion(
+  nodeUrl: string,
+  baseFetch?: WindowOrWorkerGlobalScope['fetch']
+): Promise<string> {
+  if (!baseFetch && nodeSpecVersionCache[nodeUrl]) {
+    return nodeSpecVersionCache[nodeUrl];
+  }
+  const version = await fetchNodeSpecVersion(nodeUrl, baseFetch);
+  if (!baseFetch) {
+    nodeSpecVersionCache[nodeUrl] = version;
+  }
+  return version;
+}
+
+/**
+ * Return default node endpoints asynchronously, verifying unversioned/aggregator
+ * candidates (e.g., Lava) against the requested RPC version family.
+ * Successful spec-version lookups are cached for the process lifetime.
+ */
+export async function getDefaultNodesAsync(
+  rpcVersion: SupportedRpcVersion,
+  options?: { baseFetch?: WindowOrWorkerGlobalScope['fetch'] }
+): Promise<{
+  SN_MAIN: string[];
+  SN_SEPOLIA: string[];
+}> {
+  const syncNodes = getDefaultNodes(rpcVersion);
+  const result: { SN_MAIN: string[]; SN_SEPOLIA: string[] } = {
+    SN_MAIN: [...syncNodes.SN_MAIN],
+    SN_SEPOLIA: [...syncNodes.SN_SEPOLIA],
+  };
+  const expectedPatchVersion = toAnyPatchVersion(rpcVersion);
+  const networks = Object.values(NetworkName) as NetworkName[];
+
+  const probes = networks.flatMap((network) =>
+    RPC_UNKNOWN_VERSIONED_CANDIDATES.map((nodeUrl) => ({ network, nodeUrl }))
   );
+
+  const matches = await Promise.all(
+    probes.map(async ({ network, nodeUrl }) => {
+      try {
+        const detected = await getCachedNodeSpecVersion(nodeUrl, options?.baseFetch);
+        if (isVersion(expectedPatchVersion, detected)) {
+          return { network, nodeUrl };
+        }
+      } catch {
+        // Candidate does not match or is unreachable; skip it.
+      }
+      return null;
+    })
+  );
+
+  matches.forEach((match) => {
+    if (match) {
+      result[match.network].push(match.nodeUrl);
+    }
+  });
+
+  return result;
+}
+
+/**
+ * Resolve a default node URL whose reported spec version matches the requested version.
+ * Unversioned/aggregator endpoints (e.g., Lava) are probed and skipped if they do not
+ * report a version matching the requested family.
+ */
+export async function resolveDefaultNodeUrl(
+  networkName?: NetworkName,
+  rpcVersion?: SupportedRpcVersion,
+  options?: { baseFetch?: WindowOrWorkerGlobalScope['fetch'] }
+): Promise<string> {
+  const version = rpcVersion ?? (config.get('rpcVersion') as SupportedRpcVersion);
+  const network = networkName ?? NetworkName.SN_SEPOLIA;
+  const nodes = await getDefaultNodesAsync(version, options);
+  const candidates = nodes[network];
+
+  if (candidates.length === 0) {
+    throw new LibraryError(
+      `No default node found matching RPC version ${version} for network ${network}`
+    );
+  }
+
+  const randIdx = Math.floor(Math.random() * candidates.length);
+  return candidates[randIdx];
 }
 
 /**

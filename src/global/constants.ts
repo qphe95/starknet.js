@@ -212,6 +212,10 @@ export const DEFAULT_GLOBAL_CONFIG: {
   blake: undefined,
 };
 
+/**
+ * Kept for backwards compatibility.
+ * New code should use {@link getDefaultNodes} or {@link RPC_VERSIONED_DEFAULT_NODES}.
+ */
 export const RPC_DEFAULT_NODES = {
   SN_MAIN: [`https://api.zan.top/public/starknet-mainnet/rpc/`],
   SN_SEPOLIA: [`https://api.zan.top/public/starknet-sepolia/rpc/`],
@@ -221,6 +225,32 @@ export const PAYMASTER_RPC_NODES = {
   SN_MAIN: [`https://starknet.paymaster.avnu.fi`],
   SN_SEPOLIA: [`https://sepolia.paymaster.avnu.fi`],
 } as const;
+
+/**
+ * Deterministic default node URLs per supported RPC version.
+ * These endpoints are known to serve the spec version indicated by the URL path.
+ */
+export const RPC_VERSIONED_DEFAULT_NODES = {
+  [_SupportedRpcVersion.v0_9_0]: {
+    SN_MAIN: ['https://api.zan.top/public/starknet-mainnet/rpc/v0_9'],
+    SN_SEPOLIA: ['https://api.zan.top/public/starknet-sepolia/rpc/v0_9'],
+  },
+  [_SupportedRpcVersion.v0_10_0]: {
+    SN_MAIN: ['https://api.zan.top/public/starknet-mainnet/rpc/v0_10'],
+    SN_SEPOLIA: ['https://api.zan.top/public/starknet-sepolia/rpc/v0_10'],
+  },
+  [_SupportedRpcVersion.v0_10_2]: {
+    SN_MAIN: ['https://api.zan.top/public/starknet-mainnet/rpc/v0_10'],
+    SN_SEPOLIA: ['https://api.zan.top/public/starknet-sepolia/rpc/v0_10'],
+  },
+} as const;
+
+/**
+ * Candidate endpoints whose RPC version is not deterministic from the URL.
+ * These are probed at runtime with starknet_specVersion and only used when
+ * they report a version matching the requested family.
+ */
+export const RPC_UNKNOWN_VERSIONED_CANDIDATES = ['https://rpc.starknet.lava.build:443'] as const;
 
 // Default system messages
 export const SYSTEM_MESSAGES = {

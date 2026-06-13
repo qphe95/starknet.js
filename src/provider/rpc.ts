@@ -1,6 +1,10 @@
 import { RPC09, RPC0101 } from '../channel';
 import { config } from '../global/config';
-import { SupportedRpcVersion, type SupportedRpcVersion0_10 } from '../global/constants';
+import {
+  NetworkName,
+  SupportedRpcVersion,
+  type SupportedRpcVersion0_10,
+} from '../global/constants';
 import { logger } from '../global/logger';
 import {
   AccountInvocations,
@@ -41,7 +45,7 @@ import { extractContractHashes, isSierra } from '../utils/contract';
 import { LibraryError } from '../utils/errors';
 import { solidityUint256PackedKeccak256 } from '../utils/hash';
 import { toHex } from '../utils/num';
-import { wait } from '../utils/provider';
+import { resolveDefaultNodeUrl, wait } from '../utils/provider';
 import { isSupportedSpecVersion, isVersion } from '../utils/resolve';
 import { RPCResponseParser } from './modules/responseParser';
 import { getTipStatsFromBlocks, TipAnalysisOptions, TipEstimate } from './modules/tip';
@@ -120,7 +124,19 @@ export class RpcProvider implements ProviderInterface {
     this: { new (...args: ConstructorParameters<typeof RpcProvider>): T },
     optionsOrProvider?: RpcProviderOptions
   ): Promise<T> {
-    const channel = new RPC09.RpcChannel({ ...optionsOrProvider });
+    const options = optionsOrProvider ?? {};
+    let nodeUrl: string | undefined;
+
+    if (!options.nodeUrl || Object.values(NetworkName).includes(options.nodeUrl as NetworkName)) {
+      nodeUrl = await resolveDefaultNodeUrl(
+        options.nodeUrl as NetworkName,
+        options.specVersion ?? config.get('rpcVersion')
+      );
+    } else {
+      nodeUrl = options.nodeUrl;
+    }
+
+    const channel = new RPC09.RpcChannel({ ...options, nodeUrl });
     const spec = await channel.getSpecVersion();
 
     // Optimistic Warning in case of the patch version
